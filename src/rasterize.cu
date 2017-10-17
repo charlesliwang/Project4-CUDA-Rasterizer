@@ -19,6 +19,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #define TEXTURE 1
+#define BILINEAR 1
 
 namespace {
 
@@ -146,6 +147,24 @@ glm::vec3 getTexColor(TextureData* texture, int u, int v, int width, int height)
 	return glm::vec3(r, g, b);
 }
 
+__device__
+glm::vec3 getBilinearFilterColor(TextureData* texture, float u, float v, int width, int height) {
+	float dX = u - glm::floor(u);
+	float dY = v - glm::floor(v);
+	int x = (int)u;
+	int y = (int)v;
+
+	glm::vec3 p0 = getTexColor(texture, x, y, width, height);
+	glm::vec3 p1 = getTexColor(texture, glm::clamp(x+1, 0, width - 1), y, width, height);
+	glm::vec3 p2 = getTexColor(texture, x, glm::clamp(y + 1, 0, height - 1), width, height);
+	glm::vec3 p3 = getTexColor(texture, glm::clamp(x + 1, 0, width - 1), glm::clamp(y + 1, 0, height - 1), width, height);
+
+	glm::vec3 interp1 = glm::mix(p0, p1, dX);
+	glm::vec3 interp2 = glm::mix(p2, p3, dX);
+	return glm::mix(interp1, interp2, dY);
+
+}
+
 /** 
 * Writes fragment colors to the framebuffer
 */
@@ -162,10 +181,14 @@ void render(int w, int h, Fragment *fragmentBuffer, glm::vec3 *framebuffer) {
 		glm::vec3 col(1.0f, 1.0f, 1.0f);
 #if TEXTURE
 		if (f.dev_diffuseTex != NULL) {
-			int u = f.uv[0] * (float)f.texWidth;
-			int v = f.uv[1] * (float)f.texHeight;
+			float u = f.uv[0] * (float)f.texWidth;
+			float v = f.uv[1] * (float)f.texHeight;
 			int color_idx = u + v*f.texWidth;
+#if BILINEAR
+			col = getBilinearFilterColor(f.dev_diffuseTex, u, v, f.texWidth, f.texHeight);
+#else
 			col = getTexColor(f.dev_diffuseTex, u, v, f.texWidth, f.texHeight);
+#endif
 		}
 #endif
 		glm::vec3 light_direction = glm::normalize(-f.eyePos);
