@@ -20,6 +20,7 @@
 
 #define TEXTURE 1
 #define BILINEAR 1
+#define DRAWMODE 1
 
 namespace {
 
@@ -175,7 +176,7 @@ void render(int w, int h, Fragment *fragmentBuffer, glm::vec3 *framebuffer) {
     int index = x + (y * w);
 
     if (x < w && y < h) {
-
+#if DRAWMODE == 2
 		//LAMBERT SHADING
 		Fragment f = fragmentBuffer[index];
 		glm::vec3 col(1.0f, 1.0f, 1.0f);
@@ -194,6 +195,9 @@ void render(int w, int h, Fragment *fragmentBuffer, glm::vec3 *framebuffer) {
 		glm::vec3 light_direction = glm::normalize(-f.eyePos);
 		float dot = glm::dot(light_direction, f.eyeNor);
 		framebuffer[index] = col * dot;
+#else DRAWMODE == 0 //POINTS OR LINES
+		framebuffer[index] = fragmentBuffer[index].color;
+#endif
 		//framebuffer[index] = glm::vec3(f.uv[0],f.uv[1],0.0f);
 
 		// TODO: add your fragment shader code here
@@ -749,11 +753,12 @@ void kernRasterize(int n, int width, int height, Primitive *primitives, Fragment
 	int idx = (blockIdx.x * blockDim.x) + threadIdx.x;
 	if (idx >= n) { return; }
 	Primitive p = primitives[idx];
+#if DRAWMODE == 2
 	glm::vec3 tri[3];
 	tri[0] = glm::vec3(p.v[0].pos);
 	tri[1] = glm::vec3(p.v[1].pos);
 	tri[2] = glm::vec3(p.v[2].pos);
-	AABB aabb = getAABBForTriangle(tri); 
+	AABB aabb = getAABBForTriangle(tri);
 	int minX = glm::clamp((int)aabb.min.x, 0, width);
 	int maxX = glm::clamp((int)aabb.max.x, 0, width);
 	int minY = glm::clamp((int)aabb.min.y, 0, height);
@@ -769,7 +774,7 @@ void kernRasterize(int n, int width, int height, Primitive *primitives, Fragment
 				glm::vec3 normal = glm::normalize(bary.x * v0.eyeNor + bary.y * v1.eyeNor + bary.z * v2.eyeNor);
 				glm::vec3 pos = bary.x * v0.eyePos + bary.y * v1.eyePos + bary.z * v2.eyePos;
 				Fragment f;
-				f.color = glm::vec3(1.0f,1.0f,1.0f);
+				f.color = glm::vec3(1.0f, 1.0f, 1.0f);
 				f.eyeNor = normal;
 				f.eyePos = pos;
 #if TEXTURE
@@ -784,8 +789,8 @@ void kernRasterize(int n, int width, int height, Primitive *primitives, Fragment
 				f.texHeight = v0.texHeight;
 				f.dev_diffuseTex = v0.dev_diffuseTex;
 #endif
-				
-				float curr_depth = getZAtCoordinate(bary,tri) ; //calculate value
+
+				float curr_depth = getZAtCoordinate(bary, tri); //calculate value
 				bool isSet;
 				do {
 					isSet = (atomicCAS(&mutex[id1d], 0, 1) == 0);
@@ -796,11 +801,45 @@ void kernRasterize(int n, int width, int height, Primitive *primitives, Fragment
 						}
 						mutex[id1d] = 0;
 					}
-					
+
 				} while (!isSet);
 			}
 		}
 	}
+#elif DRAWMODE == 0 // POINTS
+	for (int i = 0; i < 3; i++) {
+		int x = p.v[i].pos.x;
+		int y = p.v[i].pos.y;
+		int id1d = (y*width) + x;
+		if ((x >= 0 && x < width) && (y >= 0 && y < height)) {
+			fragment_buffer[id1d].color = glm::vec3(1.0f, 1.0f, 1.0f);
+		}
+	}
+#else //LINES
+	for (int i = 0; i < 3; i++) {
+		int j = i + 1;
+		if (j > 2) { j = 0; }
+		glm::vec4 origin;
+		glm::vec4 dest;
+		if (p.v[i].pos.x < p.v[j].pos.x) {
+			origin = p.v[i].pos;
+			dest = p.v[j].pos;
+		}
+		else {
+			dest = p.v[i].pos;
+			origin = p.v[j].pos;
+		}
+		
+		glm::vec3 slope = glm::vec3(dest - origin);
+		for (int x = (int)origin.x; x < (int)dest.x; x++) {
+			int y = (int)origin.y + (x - (int)origin.x ) * (slope.y/slope.x);
+			int id1d = (y*width) + x;
+			if ((x >= 0 && x < width) && (y >= 0 && y < height)) {
+				fragment_buffer[id1d].color = glm::vec3(1.0f, 1.0f, 1.0f);
+			}
+		}
+	}
+#endif
 }
 
 
