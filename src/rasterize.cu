@@ -18,9 +18,12 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "timer.h"
+
 #define TEXTURE 1
+#define PERSPECTIVECORRECT 1
 #define BILINEAR 1
-#define DRAWMODE 1
+#define DRAWMODE 2
 
 namespace {
 
@@ -198,7 +201,6 @@ void render(int w, int h, Fragment *fragmentBuffer, glm::vec3 *framebuffer) {
 #else DRAWMODE == 0 //POINTS OR LINES
 		framebuffer[index] = fragmentBuffer[index].color;
 #endif
-		//framebuffer[index] = glm::vec3(f.uv[0],f.uv[1],0.0f);
 
 		// TODO: add your fragment shader code here
 
@@ -778,12 +780,16 @@ void kernRasterize(int n, int width, int height, Primitive *primitives, Fragment
 				f.eyeNor = normal;
 				f.eyePos = pos;
 #if TEXTURE
+				glm::vec2 uv;
+#if PERSPECTIVECORRECT
 				float z0 = 1.0f / v0.eyePos.z;
 				float z1 = 1.0f / v1.eyePos.z;
 				float z2 = 1.0f / v2.eyePos.z;
-				glm::vec2 uv = (bary.x * v0.texcoord0 * z0) + (bary.y * v1.texcoord0 * z1) + (bary.z * v2.texcoord0 * z2);
+				uv = (bary.x * v0.texcoord0 * z0) + (bary.y * v1.texcoord0 * z1) + (bary.z * v2.texcoord0 * z2);
 				uv /= (bary.x * z0 + bary.y * z1 + bary.z *z2);
-				//glm::vec2 uv = bary.x * v0.texcoord0 + bary.y * v1.texcoord0 + bary.z * v2.texcoord0;
+#else
+				uv = bary.x * v0.texcoord0 + bary.y * v1.texcoord0 + bary.z * v2.texcoord0;
+#endif
 				f.uv = uv;
 				f.texWidth = v0.texWidth;
 				f.texHeight = v0.texHeight;
@@ -821,7 +827,7 @@ void kernRasterize(int n, int width, int height, Primitive *primitives, Fragment
 		if (j > 2) { j = 0; }
 		glm::vec4 origin;
 		glm::vec4 dest;
-		if (p.v[i].pos.x < p.v[j].pos.x) {
+		if (p.v[i].pos.x <= p.v[j].pos.x) {
 			origin = p.v[i].pos;
 			dest = p.v[j].pos;
 		}
@@ -829,10 +835,28 @@ void kernRasterize(int n, int width, int height, Primitive *primitives, Fragment
 			dest = p.v[i].pos;
 			origin = p.v[j].pos;
 		}
-		
-		glm::vec3 slope = glm::vec3(dest - origin);
-		for (int x = (int)origin.x; x < (int)dest.x; x++) {
-			int y = (int)origin.y + (x - (int)origin.x ) * (slope.y/slope.x);
+		int dY = dest.y - origin.y;
+		int dX = dest.x - origin.x;
+		int prevY = origin.y;
+		for (int x = (int)origin.x; x <= (int)dest.x; x++) {
+			int y = (int)origin.y + (dY * (x - (int)origin.x ) /dX);
+			int oriY;
+			int destY;
+			if (prevY <= y) {
+				oriY = prevY;
+				destY = y;
+			}
+			else {
+				oriY = y;
+				destY = prevY;
+			}
+			for (int fillY = oriY + 1; fillY <= destY; fillY++) {
+				int id1d = (fillY*width) + x;
+				if ((x >= 0 && x < width) && (fillY >= 0 && fillY < height)) {
+					fragment_buffer[id1d].color = glm::vec3(1.0f, 1.0f, 1.0f);
+				}
+			}
+			prevY = y;
 			int id1d = (y*width) + x;
 			if ((x >= 0 && x < width) && (y >= 0 && y < height)) {
 				fragment_buffer[id1d].color = glm::vec3(1.0f, 1.0f, 1.0f);
@@ -842,6 +866,7 @@ void kernRasterize(int n, int width, int height, Primitive *primitives, Fragment
 #endif
 }
 
+bool timerOnce = false;
 
 /**
  * Perform rasterization.
@@ -856,6 +881,10 @@ void rasterize(uchar4 *pbo, const glm::mat4 & MVP, const glm::mat4 & MV, const g
 	// (See README for rasterization pipeline outline.)
 
 	// Vertex Process & primitive assembly
+	if (!timerOnce) {
+		startCpuTimer();
+	}
+
 	{
 		curPrimitiveBeginId = 0;
 		dim3 numThreadsPerBlock(128);
@@ -886,24 +915,51 @@ void rasterize(uchar4 *pbo, const glm::mat4 & MVP, const glm::mat4 & MV, const g
 
 		checkCUDAError("Vertex Processing and Primitive Assembly");
 	}
+
+	if (!timerOnce) {
+		endCpuTimer();
+		printf("Vertex and Primitive Assembly: \n");
+		printTime();
+	}
+
 	
 	cudaMemset(dev_fragmentBuffer, 0, width * height * sizeof(Fragment));
 	initDepth << <blockCount2d, blockSize2d >> >(width, height, dev_depth);
 	
 	// TODO: rasterize
+	if (!timerOnce) {
+		startCpuTimer();
+	}
 
 	cudaMemset(dev_mutex, 0, sizeof(int));
 	int numThreadsPerBlock = 128;
 	dim3 numBlocksForVertices((totalNumPrimitives + numThreadsPerBlock - 1) / numThreadsPerBlock);
 	kernRasterize << <numBlocksForVertices, numThreadsPerBlock >> > (totalNumPrimitives, width, height, dev_primitives, dev_fragmentBuffer, dev_depth, dev_mutex);
 
+	if (!timerOnce) {
+		endCpuTimer();
+		printf("Rasterization: \n");
+		printTime();
+	}
+
 	checkCUDAError("resterization");
     // Copy depthbuffer colors into framebuffer
+	if (!timerOnce) {
+		startCpuTimer();
+	}
 	render << <blockCount2d, blockSize2d >> >(width, height, dev_fragmentBuffer, dev_framebuffer);
 	checkCUDAError("fragment shader");
+
+	if (!timerOnce) {
+		endCpuTimer();
+		printf("Render (Fragment Shading): \n");
+		printTime();
+	}
+
     // Copy framebuffer into OpenGL buffer for OpenGL previewing
     sendImageToPBO<<<blockCount2d, blockSize2d>>>(pbo, width, height, dev_framebuffer);
     checkCUDAError("copy render result to pbo");
+	timerOnce = true;
 }
 
 /**
