@@ -835,8 +835,8 @@ void kernRasterize(int n, int width, int height, Primitive *primitives, Fragment
 			dest = p.v[i].pos;
 			origin = p.v[j].pos;
 		}
-		int dY = dest.y - origin.y;
-		int dX = dest.x - origin.x;
+		int dY = (int)dest.y - (int)origin.y;
+		int dX = (int)dest.x - (int)origin.x;
 		int prevY = origin.y;
 		for (int x = (int)origin.x; x <= (int)dest.x; x++) {
 			int y = (int)origin.y + (dY * (x - (int)origin.x ) /dX);
@@ -850,23 +850,24 @@ void kernRasterize(int n, int width, int height, Primitive *primitives, Fragment
 				oriY = y;
 				destY = prevY;
 			}
-			for (int fillY = oriY + 1; fillY <= destY; fillY++) {
+			for (int fillY = oriY; fillY <= destY; fillY++) {
 				int id1d = (fillY*width) + x;
 				if ((x >= 0 && x < width) && (fillY >= 0 && fillY < height)) {
 					fragment_buffer[id1d].color = glm::vec3(1.0f, 1.0f, 1.0f);
 				}
 			}
 			prevY = y;
-			int id1d = (y*width) + x;
-			if ((x >= 0 && x < width) && (y >= 0 && y < height)) {
-				fragment_buffer[id1d].color = glm::vec3(1.0f, 1.0f, 1.0f);
-			}
+			//int id1d = (y*width) + x;
+			//if ((x >= 0 && x < width) && (y >= 0 && y < height)) {
+			//	fragment_buffer[id1d].color = glm::vec3(1.0f, 1.0f, 1.0f);
+			//}
 		}
 	}
 #endif
 }
 
 bool timerOnce = false;
+int count = 0;
 
 /**
  * Perform rasterization.
@@ -879,6 +880,12 @@ void rasterize(uchar4 *pbo, const glm::mat4 & MVP, const glm::mat4 & MV, const g
 
 	// Execute your rasterization pipeline here
 	// (See README for rasterization pipeline outline.)
+
+	count++;
+	if (count > 1000) {
+		count = 0;
+		timerOnce = false;
+	}
 
 	// Vertex Process & primitive assembly
 	if (!timerOnce) {
